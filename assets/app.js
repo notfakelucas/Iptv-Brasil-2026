@@ -550,7 +550,7 @@ function killEngines() {
 function playNow(info) {
   const layer = $('#player'); layer.hidden = false; document.body.classList.add('no-scroll');
   layer.innerHTML = `
-    <video playsinline controls autoplay></video>
+    <video playsinline controls></video>
     <div class="pl-top">
       <button class="pl-back" aria-label="Voltar">${I.chevL}</button>
       <div class="pl-title"><h3>${escapeHtml(info.title || '')}</h3><div class="sub">${escapeHtml(info.sub || '')}</div></div>
@@ -562,10 +562,11 @@ function playNow(info) {
     <div class="pl-err"><div><h3>Não foi possível reproduzir</h3><p>O link pode estar fora do ar ou exigir o proxy.<br>Tente outro título.</p><button class="btn btn-ghost" id="pl-retry" style="margin-top:14px">Tentar de novo</button></div></div>`;
   const v = layer.querySelector('video');
   const err = layer.querySelector('.pl-err');
-  let liveReconnectT = null;   // reconexão ao vivo adiada (limpa no close)
+  let liveReconnectT = null, liveKickT = null;   // reconexão/pré-buffer ao vivo (limpa no close)
   const close = () => {
     try { pushCont(info, v.currentTime, v.duration); } catch {}
     if (liveReconnectT) { clearTimeout(liveReconnectT); liveReconnectT = null; }
+    if (liveKickT) { clearTimeout(liveKickT); liveKickT = null; }
     killEngines();
     v.pause(); v.removeAttribute('src'); v.load();
     layer.hidden = true; layer.innerHTML = ''; document.body.classList.remove('no-scroll');
@@ -642,6 +643,17 @@ function playNow(info) {
         { liveBufferLatencyChasing: false, lazyLoad: false,
           stashInitialSize: 1024 * 1024, autoCleanupSourceBuffer: true });
       curMpegts.attachMediaElement(v);
+      // PRÉ-BUFFER: as fontes de IPTV entregam ~tempo real, sem folga — tocar na
+      // hora trava a todo instante. Acumula uma folga antes de dar play, pra
+      // absorver o jitter; se não encher em 9s, toca do mesmo jeito.
+      const PREBUF = 6;
+      const kick = () => {
+        const ah = v.buffered.length ? v.buffered.end(v.buffered.length - 1) - v.currentTime : 0;
+        if (ah >= PREBUF) { v.removeEventListener('progress', kick); v.play().catch(() => {}); }
+      };
+      v.addEventListener('progress', kick);
+      if (liveKickT) clearTimeout(liveKickT);
+      liveKickT = setTimeout(() => { v.removeEventListener('progress', kick); v.play().catch(() => {}); }, 8000);
       // o proxy serverless encerra o stream infinito (~60s) → LOADING_COMPLETE/ERROR:
       // se já tocou, reconecta ao vivo; se nunca tocou (fonte vazia/morta), tenta a próxima
       const onEnd = () => {
@@ -664,7 +676,8 @@ function playNow(info) {
       engine = 'native';
       v.src = src;
     }
-    v.play().catch(() => {});
+    // mpegts ao vivo toca pelo pré-buffer (kick); os demais tocam já
+    if (engine !== 'mpegts') v.play().catch(() => {});
   }
   v.addEventListener('error', () => { if (engine === 'native') fail(); });
   const keys = e => {
