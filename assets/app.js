@@ -200,6 +200,7 @@ function card(item, kind) {
     c.appendChild(el('div', 'card-t', escapeHtml(cleanTitle(title))));
   } else {
     c.appendChild(el('div', 'card-t', escapeHtml(title)));
+    const ne = el('div', 'card-epg'); c.appendChild(ne); fillEpgNow(ne, title);
   }
   c.onclick = () => {
     if (kind === 'channel') playNow({ title, sub: item.group || 'Ao vivo', url: item.u, type: 'live', key, poster: item.l });
@@ -585,6 +586,18 @@ function playNow(info) {
   // idle UI
   let idleT; const idle = () => { layer.classList.remove('idle'); clearTimeout(idleT); idleT = setTimeout(() => layer.classList.add('idle'), 3200); };
   layer.onmousemove = idle; idle();
+
+  // guia no player (ao vivo): agora / a seguir + barra de progresso do programa
+  if (info.type === 'live') {
+    const sub = layer.querySelector('.pl-title .sub');
+    loadEpg().then(() => {
+      const n = epgNow(info.title); if (!n || !n.cur || !sub) return;
+      const pct = Math.max(0, Math.min(100, ((Date.now() / 1000 - n.cur.s) / (n.cur.e - n.cur.s)) * 100));
+      sub.innerHTML = `<span class="pl-epg"><b>${epgHHMM(n.cur.s)}</b> ${escapeHtml(n.cur.t)}`
+        + `<span class="pl-epgbar"><i style="width:${pct.toFixed(0)}%"></i></span></span>`
+        + (n.next ? `<span class="pl-epgnext">A seguir · ${epgHHMM(n.next.s)} ${escapeHtml(n.next.t)}</span>` : '');
+    });
+  }
 
   // lista de fontes (qualidades/alternativas) — ao falhar, tenta a próxima
   let srcList = (info.alts && info.alts.length) ? info.alts.slice() : [info.url];
