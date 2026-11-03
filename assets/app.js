@@ -562,8 +562,10 @@ function playNow(info) {
     <div class="pl-err"><div><h3>Não foi possível reproduzir</h3><p>O link pode estar fora do ar ou exigir o proxy.<br>Tente outro título.</p><button class="btn btn-ghost" id="pl-retry" style="margin-top:14px">Tentar de novo</button></div></div>`;
   const v = layer.querySelector('video');
   const err = layer.querySelector('.pl-err');
+  let liveReconnectT = null;   // reconexão ao vivo adiada (limpa no close)
   const close = () => {
     try { pushCont(info, v.currentTime, v.duration); } catch {}
+    if (liveReconnectT) { clearTimeout(liveReconnectT); liveReconnectT = null; }
     killEngines();
     v.pause(); v.removeAttribute('src'); v.load();
     layer.hidden = true; layer.innerHTML = ''; document.body.classList.remove('no-scroll');
@@ -643,8 +645,17 @@ function playNow(info) {
       // o proxy serverless encerra o stream infinito (~60s) → LOADING_COMPLETE/ERROR:
       // se já tocou, reconecta ao vivo; se nunca tocou (fonte vazia/morta), tenta a próxima
       const onEnd = () => {
-        if (played && reconnects < 40) { reconnects++; toast('Reconectando ao vivo…'); setTimeout(start, 700); }
-        else fail();
+        // A fonte/proxy cortam o stream com frequência, mas o mpegts já tem ~20s
+        // em buffer. Em vez de reconectar na hora (jogando o buffer fora e
+        // engasgando toda hora), ESPERA o buffer quase esvaziar e só então recria:
+        // o canal toca suave nesse meio tempo e a troca cai no vão natural.
+        // Reconexão silenciosa (sem toast repetido). Erro só se nunca tocou.
+        if (!(played && reconnects < 40)) { fail(); return; }
+        if (liveReconnectT) return;           // já agendado
+        reconnects++;
+        const ahead = v.buffered.length ? v.buffered.end(v.buffered.length - 1) - v.currentTime : 0;
+        const wait = Math.min(28000, Math.max(300, (ahead - 2.5) * 1000));
+        liveReconnectT = setTimeout(() => { liveReconnectT = null; start(); }, wait);
       };
       curMpegts.on(mpegts.Events.ERROR, onEnd);
       curMpegts.on(mpegts.Events.LOADING_COMPLETE, onEnd);
