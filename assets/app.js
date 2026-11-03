@@ -140,6 +140,7 @@ function card(item, kind) {
   else {
     const y = yearOf(title);
     if (y) p.insertAdjacentHTML('beforeend', `<span class="badge-tl">${y}</span>`);
+    if (item.r) p.insertAdjacentHTML('beforeend', `<span class="rating-pill">★ ${item.r}</span>`);
   }
   p.insertAdjacentHTML('beforeend', `<div class="ov"></div><div class="play">${I.play}</div>`);
   const fav = el('button', 'fav-dot' + (isFav(key) ? ' on' : ''), I.heart);
@@ -199,18 +200,21 @@ function hero(items) {
   function show(i) {
     idx = (i + items.length) % items.length;
     const it = items[idx];
-    const img = it.l ? `<img src="${imgSrc(it.l)}" alt="" onerror="this.style.visibility='hidden'">` : '';
+    const bgUrl = it.b || it.l;
+    const img = bgUrl ? `<img src="${imgSrc(bgUrl)}" alt="" onerror="this.style.visibility='hidden'">` : '';
     bg.innerHTML = img;
     const y = yearOf(it.t);
+    const synopsis = it.o ? escapeHtml(it.o)
+      : 'Assista agora em alta qualidade, direto no seu navegador. Milhares de filmes, séries e canais ao vivo no MobTV.';
     c.innerHTML = `
       <div class="hero-badge"><i></i> Em destaque no MobTV</div>
       <h1>${escapeHtml(cleanTitle(it.t))}</h1>
       <div class="hero-meta">
-        <span class="chip star">★ Destaque</span>
+        ${it.r ? `<span class="chip star">★ ${it.r}</span>` : `<span class="chip star">★ Destaque</span>`}
         ${y ? `<span class="chip">${y}</span>` : ''}
         <span class="chip">Filme</span><span class="chip">HD</span>
       </div>
-      <p>Assista agora em alta qualidade, direto no seu navegador. Milhares de filmes, séries e canais ao vivo no MobTV.</p>
+      <p>${synopsis}</p>
       <div class="hero-actions">
         <button class="btn btn-primary" id="h-play">${I.play} Assistir</button>
         <button class="btn btn-ghost" id="h-info">${I.info} Detalhes</button>
@@ -352,21 +356,24 @@ function openMovie(item) {
   const title = item.t || item.name;
   const key = 'm:' + (item.slug || '') + ':' + title;
   const m = modalShell();
-  const art = item.l ? `<img src="${imgSrc(item.l)}" alt="" onerror="this.style.visibility='hidden'">` : '';
+  const artUrl = item.b || item.l;
+  const art = artUrl ? `<img src="${imgSrc(artUrl)}" alt="" onerror="this.style.visibility='hidden'">` : '';
   const y = yearOf(title);
+  const synopsis = item.o ? escapeHtml(item.o)
+    : 'Reprodução online em alta qualidade. Se um link estiver fora do ar, tente outro título — o catálogo vem das suas listas.';
   m.body.innerHTML = `
     <div class="sheet-hero">${art}<button class="sheet-x">${I.x}</button></div>
     <div class="sheet-body">
       <h2>${escapeHtml(cleanTitle(title))}</h2>
       <div class="sheet-meta">
-        ${y ? `<span class="chip">${y}</span>` : ''}<span class="chip">Filme</span>
-        <span class="chip">HD</span><span class="chip star">MobTV</span>
+        ${item.r ? `<span class="chip star">★ ${item.r}</span>` : ''}
+        ${y ? `<span class="chip">${y}</span>` : ''}<span class="chip">Filme</span><span class="chip">HD</span>
       </div>
       <div class="sheet-actions">
         <button class="btn btn-primary" id="m-play">${I.play} Assistir</button>
         <button class="btn btn-ghost" id="m-fav">${I.heart} ${isFav(key) ? 'Na minha lista' : 'Minha lista'}</button>
       </div>
-      <p style="color:var(--muted);line-height:1.6;max-width:620px">Reprodução online em alta qualidade. Se um link estiver fora do ar, tente outro título — o catálogo é atualizado pelas suas listas.</p>
+      <p style="color:var(--muted);line-height:1.6;max-width:620px">${synopsis}</p>
     </div>`;
   m.body.querySelector('.sheet-x').onclick = m.close;
   m.body.querySelector('#m-play').onclick = () => { m.close(); playNow({ title, sub: 'Filme', url: item.u, type: 'movie', key, poster: item.l }); };
@@ -378,20 +385,23 @@ function openSerie(serie) {
   const title = serie.t;
   const key = 's:' + (serie.slug || '') + ':' + title;
   const m = modalShell();
-  const art = serie.l ? `<img src="${imgSrc(serie.l)}" alt="" onerror="this.style.visibility='hidden'">` : '';
+  const artUrl = serie.b || serie.l;
+  const art = artUrl ? `<img src="${imgSrc(artUrl)}" alt="" onerror="this.style.visibility='hidden'">` : '';
   // group eps by season
   const seasons = {};
   (serie.eps || []).forEach(e => { (seasons[e.s] = seasons[e.s] || []).push(e); });
   const snums = Object.keys(seasons).map(Number).sort((a, b) => a - b);
+  const synopsis = serie.o ? `<p style="color:var(--muted);line-height:1.6;max-width:620px;margin:0 0 4px">${escapeHtml(serie.o)}</p>` : '';
   m.body.innerHTML = `
     <div class="sheet-hero">${art}<button class="sheet-x">${I.x}</button></div>
     <div class="sheet-body">
       <h2>${escapeHtml(cleanTitle(title))}</h2>
-      <div class="sheet-meta"><span class="chip">Série</span><span class="chip">${snums.length} temporada(s)</span><span class="chip">${(serie.eps || []).length} ep.</span></div>
+      <div class="sheet-meta">${serie.r ? `<span class="chip star">★ ${serie.r}</span>` : ''}<span class="chip">Série</span><span class="chip">${snums.length} temporada(s)</span><span class="chip">${(serie.eps || []).length} ep.</span></div>
       <div class="sheet-actions">
         <button class="btn btn-primary" id="s-play">${I.play} Assistir T${snums[0]}:E${seasons[snums[0]][0].e}</button>
         <button class="btn btn-ghost" id="s-fav">${I.heart} ${isFav(key) ? 'Na minha lista' : 'Minha lista'}</button>
       </div>
+      ${synopsis}
       <div class="seasons"></div>
       <div class="eps"></div>
     </div>`;

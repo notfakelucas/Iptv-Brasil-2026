@@ -43,6 +43,76 @@ def strip_ep(name):
         return base, int(m.group(1)), int(m.group(2))
     return None
 
+# ---------- TMDB enrichment (optional; set TMDB_KEY) ----------
+def q_clean(name):
+    s = re.sub(r'\b(19|20)\d{2}\b', '', name)
+    s = re.sub(r'\[[^\]]*\]|\([^)]*\)', '', s)
+    s = re.sub(r'\b(dublado|legendado|nacional|4k|uhd|fhd|hd|sd)\b', '', s, flags=re.I)
+    return re.sub(r'\s{2,}', ' ', s).strip(' -:·')
+
+def tmdb_enrich(movies, series, key, cache_path):
+    import urllib.request, urllib.parse
+    from concurrent.futures import ThreadPoolExecutor
+    IMG = 'https://image.tmdb.org/t/p/'
+    cache = {}
+    if os.path.exists(cache_path):
+        try: cache = json.load(open(cache_path))
+        except Exception: cache = {}
+    lock_misses = [0]
+    def lookup(kind, title, year):
+        ck = f"{kind}|{title}|{year}"
+        if ck in cache: return cache[ck]
+        params = {'api_key': key, 'query': title, 'language': 'pt-BR', 'include_adult': 'false'}
+        if year: params['year' if kind == 'movie' else 'first_air_date_year'] = year
+        url = f"https://api.themoviedb.org/3/search/{'movie' if kind=='movie' else 'tv'}?" + urllib.parse.urlencode(params)
+        res = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(url, timeout=12) as r:
+                    d = json.load(r)
+                arr = d.get('results') or []
+                if arr:
+                    t = arr[0]
+                    res = {
+                        'l': (IMG + 'w500' + t['poster_path']) if t.get('poster_path') else None,
+                        'b': (IMG + 'w1280' + t['backdrop_path']) if t.get('backdrop_path') else None,
+                        'o': (t.get('overview') or '').strip(),
+                        'r': round(t.get('vote_average') or 0, 1),
+                        'y': (t.get('release_date') or t.get('first_air_date') or '')[:4],
+                    }
+                break
+            except Exception:
+                if attempt == 2: lock_misses[0] += 1
+        cache[ck] = res
+        return res
+    tasks = []
+    for d in movies.values():
+        for it in d['items']: tasks.append((it, 'movie'))
+    for d in series.values():
+        for t in d['titles'].values(): tasks.append((t, 'tv'))
+    print(f"TMDB: enriquecendo {len(tasks)} títulos…")
+    def work(pair):
+        it, kind = pair
+        r = lookup(kind, q_clean(it['t']), yearOf(it['t']))
+        if r:
+            if r.get('l'): it['l'] = r['l']
+            if r.get('b'): it['b'] = r['b']
+            if r.get('o'): it['o'] = r['o']
+            if r.get('r'): it['r'] = r['r']
+    done = 0
+    with ThreadPoolExecutor(max_workers=24) as ex:
+        for _ in ex.map(work, tasks):
+            done += 1
+            if done % 2000 == 0: print(f"  … {done}/{len(tasks)}")
+    try: json.dump(cache, open(cache_path, 'w'))
+    except Exception: pass
+    hit = sum(1 for t in tasks if t[0].get('o') or (t[0].get('l') or '').find('image.tmdb') >= 0)
+    print(f"TMDB: concluído. casados ~{hit}/{len(tasks)} | falhas de rede: {lock_misses[0]}")
+
+def yearOf(s):
+    m = re.search(r'\b(19|20)\d{2}\b', s or '')
+    return m.group(0) if m else ''
+
 # ---------- VOD (Filmes-Series.m3u8) ----------
 movies = {}   # cat_slug -> {label, items:[{t,l,u}]}
 series = {}   # cat_slug -> {label, titles: {base: {t,l,eps:[{s,e,u}]}}}
@@ -96,6 +166,12 @@ for fn in live_files:
         d = live.setdefault(cs, {'label': g, 'items': []})
         if len(d['items']) < LIVE_CAP:
             d['items'].append({'t': it['name'], 'l': it['logo'], 'u': it['url']})
+
+# ---------- Optional TMDB enrichment ----------
+_TMDB = os.environ.get('TMDB_KEY')
+if _TMDB:
+    tmdb_enrich(movies, series, _TMDB,
+                os.path.join(os.path.dirname(os.path.abspath(out.rstrip('/'))), 'tmdb_cache.json'))
 
 # ---------- Write output ----------
 os.makedirs(out, exist_ok=True)
@@ -172,8 +248,9 @@ home['rails_series'] = pick(catalog['series'], prev_series,
 hero_cat = next((c for c in catalog['movies'] if 'lan' in c['label'].lower()), None) \
            or (catalog['movies'][0] if catalog['movies'] else None)
 if hero_cat:
-    for m in prev_movies.get(hero_cat['slug'], [])[:8]:
+    for m in prev_movies.get(hero_cat['slug'], [])[:10]:
         home['hero'].append({'t': m['t'], 'l': m['l'], 'u': m['u'],
+                             'b': m.get('b'), 'o': m.get('o'), 'r': m.get('r'),
                              'slug': hero_cat['slug'], 'type': 'movie'})
 write(os.path.join(out, 'home.json'), home)
 
