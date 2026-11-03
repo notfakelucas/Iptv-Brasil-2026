@@ -188,6 +188,23 @@ img{display:block}
 .page{padding:calc(var(--nav-h) + 24px) var(--gutter) 80px;min-height:100vh}
 .page-h{font-family:Sora,sans-serif;font-weight:800;font-size:clamp(22px,4vw,34px);margin:0 0 6px}
 .page-sub{color:var(--muted);margin:0 0 24px;font-size:14px}
+/* sync panel (Minha Lista) */
+.sync-box{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;
+  margin:0 0 30px;padding:18px 20px;border-radius:var(--radius-sm,14px);
+  background:var(--surface);border:1px solid var(--line)}
+.sync-main{flex:1 1 300px;min-width:0}
+.sync-label{font-weight:700;font-size:15px;margin-bottom:4px}
+.sync-code{font-family:Sora,sans-serif;font-weight:800;font-size:clamp(20px,4vw,26px);letter-spacing:.14em;
+  color:var(--accent2);margin:2px 0 6px;user-select:all}
+.sync-hint{color:var(--muted);font-size:13px;line-height:1.5;max-width:520px}
+.sync-btns{display:flex;flex-wrap:wrap;gap:8px}
+.sync-btns .btn{padding:10px 16px;border-radius:11px;font-size:13.5px}
+.sync-join{display:flex;gap:8px;margin-top:12px}
+.sync-input{flex:1 1 auto;min-width:0;padding:10px 14px;border-radius:11px;font-size:14px;
+  background:var(--bg2);border:1px solid var(--line2);color:var(--txt);letter-spacing:.08em}
+.sync-input::placeholder{color:var(--muted2);letter-spacing:normal}
+.sync-input:focus{border-color:var(--accent2);outline:none}
+.sync-join .btn{padding:10px 16px;border-radius:11px;font-size:13.5px}
 .chips-bar{display:flex;gap:8px;overflow-x:auto;padding-bottom:16px;margin-bottom:8px;scrollbar-width:none}
 .chips-bar::-webkit-scrollbar{display:none}
 .chips-bar button{flex:0 0 auto;padding:8px 15px;border-radius:99px;font-size:13px;font-weight:600;color:var(--muted);

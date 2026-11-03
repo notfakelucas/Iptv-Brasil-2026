@@ -118,22 +118,63 @@ const I = {
 };
 
 /* ---------- favorites & continue ---------- */
-const FAV = 'mobtv-fav', CONT = 'mobtv-continue';
+/* Guarda carimbo de tempo em cada item (_ts) e um mapa de remoções (FAVRM)
+   para o sync resolver em last-write-wins entre aparelhos. */
+const FAV = 'mobtv-fav', CONT = 'mobtv-continue', FAVRM = 'mobtv-fav-rm';
 function favs() { return LS.get(FAV, {}); }
+function favRm() { return LS.get(FAVRM, {}); }
 function isFav(k) { return !!favs()[k]; }
 function toggleFav(item) {
-  const m = favs(); if (m[item.key]) { delete m[item.key]; toast('Removido dos favoritos'); }
-  else { m[item.key] = item; toast('Adicionado aos favoritos'); }
-  LS.set(FAV, m); return !!m[item.key];
+  const m = favs(), rm = favRm(), t = Date.now();
+  if (m[item.key]) { delete m[item.key]; rm[item.key] = t; toast('Removido dos favoritos'); }
+  else { m[item.key] = { ...item, _ts: t }; delete rm[item.key]; toast('Adicionado aos favoritos'); }
+  LS.set(FAV, m); LS.set(FAVRM, rm); syncSoon(); return !!m[item.key];
 }
 function conts() { return LS.get(CONT, []); }
 function pushCont(item, pos, dur) {
   if (!dur || dur < 60 || pos < 10) return;
   let list = conts().filter(x => x.key !== item.key);
   if (pos / dur < 0.95) list.unshift({ ...item, pos, dur, ts: Date.now() });
-  LS.set(CONT, list.slice(0, 20));
+  LS.set(CONT, list.slice(0, 20)); syncSoon();
 }
 function contPos(key) { const c = conts().find(x => x.key === key); return c ? c.pos : 0; }
+
+/* ---------- sync entre dispositivos (conta por código, sem senha) ---------- */
+/* Tudo passa por /api/sync: o cliente manda favs/favRm/cont, o servidor faz o
+   merge e devolve o resultado — que substitui o estado local. */
+const ACCT = 'mobtv-acct', SYNC = '/api/sync';
+let _syncOff = false;                       // desliga se o backend não responder
+function acct() { return LS.get(ACCT, null); }
+function syncCode() { const a = acct(); return a && a.code ? a.code : null; }
+function newCode() {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem I/O/0/1 para não confundir
+  let s = 'MOB'; for (const b of crypto.getRandomValues(new Uint8Array(9))) s += A[b % A.length];
+  return s;                                 // 12 chars, casa com /^[A-Z0-9]{6,32}$/
+}
+const fmtCode = c => c ? c.replace(/(.{4})/g, '$1 ').trim() : '';  // exibe em grupos de 4
+function applyBlob(b) {
+  if (!b || typeof b !== 'object') return;
+  LS.set(FAV, b.favs || {});
+  LS.set(FAVRM, b.favRm || {});
+  if (Array.isArray(b.cont)) LS.set(CONT, b.cont);
+  if ((location.hash || '#/') === '#/favorites') render();
+}
+async function syncNow(opts) {
+  const code = syncCode(); if (!code || _syncOff) return false;
+  const loud = opts && opts.loud;
+  try {
+    const r = await fetch(SYNC, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code, favs: favs(), favRm: favRm(), cont: conts() }),
+    });
+    if (r.status === 503) { _syncOff = true; if (loud) toast('Sincronização indisponível agora'); return false; }
+    if (!r.ok) throw new Error(r.status);
+    applyBlob(await r.json());
+    if (loud) toast('Sincronizado');
+    return true;
+  } catch { if (loud) toast('Falha ao sincronizar'); return false; }
+}
+const syncSoon = debounce(() => syncNow(), 1500);
 
 /* ===================== Router ===================== */
 window.addEventListener('hashchange', render);
@@ -413,6 +454,61 @@ async function viewCat(app, type, slug) {
   app.appendChild(footer());
 }
 
+/* ----- sync panel (na Minha Lista) ----- */
+function syncPanel() {
+  const box = el('div', 'sync-box');
+  const code = syncCode();
+  if (code) {
+    box.innerHTML = `
+      <div class="sync-main">
+        <div class="sync-label">Sincronização ativa</div>
+        <div class="sync-code" id="sy-code">${fmtCode(code)}</div>
+        <div class="sync-hint">Digite este código em outro aparelho (nesta mesma tela) para ver a mesma lista.</div>
+      </div>
+      <div class="sync-btns">
+        <button class="btn btn-ghost" id="sy-now">Sincronizar agora</button>
+        <button class="btn btn-ghost" id="sy-copy">Copiar</button>
+        <button class="btn btn-ghost" id="sy-out">Sair</button>
+      </div>`;
+    box.querySelector('#sy-now').onclick = () => syncNow({ loud: true });
+    box.querySelector('#sy-copy').onclick = () => {
+      (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject())
+        .then(() => toast('Código copiado')).catch(() => toast(code));
+    };
+    box.querySelector('#sy-out').onclick = () => { LS.set(ACCT, null); toast('Sincronização desativada'); render(); };
+  } else {
+    box.innerHTML = `
+      <div class="sync-main">
+        <div class="sync-label">Sincronizar entre aparelhos</div>
+        <div class="sync-hint">Crie um código e use-o em outro aparelho para ter a mesma Minha Lista e Continuar assistindo — sem senha.</div>
+        <form class="sync-join" id="sy-join">
+          <input class="sync-input" id="sy-inp" placeholder="Já tem um código? cole aqui" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+          <button class="btn btn-ghost" type="submit">Entrar</button>
+        </form>
+      </div>
+      <div class="sync-btns">
+        <button class="btn btn-primary" id="sy-new">Criar código</button>
+      </div>`;
+    box.querySelector('#sy-new').onclick = async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      LS.set(ACCT, { code: newCode() });
+      const ok = await syncNow({ loud: true });
+      if (!ok && _syncOff) LS.set(ACCT, null);   // backend indisponível: não finge ter ativado
+      render();
+    };
+    box.querySelector('#sy-join').onsubmit = async (e) => {
+      e.preventDefault();
+      const raw = box.querySelector('#sy-inp').value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      if (raw.length < 6) { toast('Código inválido'); return; }
+      LS.set(ACCT, { code: raw });
+      const ok = await syncNow({ loud: true });
+      if (!ok && _syncOff) LS.set(ACCT, null);
+      render();
+    };
+  }
+  return box;
+}
+
 /* ----- favorites ----- */
 function viewFavorites(app) {
   const page = el('div', 'page');
@@ -420,6 +516,7 @@ function viewFavorites(app) {
   const contList = conts();
   page.innerHTML = `<h1 class="page-h">Minha Lista</h1><p class="page-sub">${list.length} favoritos</p>`;
   app.appendChild(page);
+  page.appendChild(syncPanel());
   if (contList.length) {
     const row = el('div', 'row');
     row.innerHTML = `<div class="row-head"><h2>Continuar assistindo</h2></div>`;
@@ -798,6 +895,9 @@ async function boot() {
   // hide splash
   const sp = $('#splash');
   setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 650); }, 900);
+  // puxa a lista mais recente ao abrir e ao voltar para a aba
+  if (syncCode()) syncNow();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && syncCode()) syncNow(); });
 }
 document.addEventListener('DOMContentLoaded', boot);
 })();
