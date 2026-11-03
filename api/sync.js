@@ -1,23 +1,21 @@
 // Sync da "Minha Lista" e do "Continuar assistindo" entre dispositivos.
 // Conta = um código aleatório (sem senha). Tudo passa por aqui: o cliente nunca
-// vê o token nem a URL do banco. Armazena em KV (Vercel KV / Upstash Redis) via
-// REST — sem dependências, só built-ins + fetch, igual aos outros endpoints.
+// vê a senha nem o host do banco. Fala o protocolo Redis nativo (RESP) direto
+// por TCP — sem dependências, só built-ins. Serve Redis Cloud (redis://) e
+// Vercel KV / Upstash (rediss://, com TLS).
 //
-//   GET  /api/sync?code=XXXX            -> devolve o blob salvo (merge pronto)
-//   POST /api/sync   {code, favs, favRm, cont}  -> faz merge e devolve o resultado
+//   GET  /api/sync?code=XXXX                     -> blob salvo (merge pronto)
+//   POST /api/sync {code, favs, favRm, cont}     -> faz merge e devolve
 //
-// Enquanto o banco não estiver conectado (env vars ausentes), responde 503 e o
-// cliente mostra "sync indisponível" sem quebrar o resto do app.
+// Sem REDIS_URL configurada, responde 503 e o cliente degrada sem quebrar.
 
-const BASE =
-  process.env.KV_REST_API_URL ||
-  process.env.UPSTASH_REDIS_REST_URL ||
-  process.env.STORAGE_KV_REST_API_URL ||
-  '';
-const TOKEN =
-  process.env.KV_REST_API_TOKEN ||
-  process.env.UPSTASH_REDIS_REST_TOKEN ||
-  process.env.STORAGE_KV_REST_API_TOKEN ||
+const net = require('node:net');
+const tls = require('node:tls');
+
+const REDIS_URL =
+  process.env.REDIS_URL ||
+  process.env.KV_URL ||
+  process.env.STORAGE_REDIS_URL ||
   '';
 
 const TTL = 60 * 60 * 24 * 365;     // 1 ano sem uso -> expira sozinho
@@ -26,23 +24,81 @@ const MAX_FAVS = 1000;              // tetos de sanidade
 const MAX_CONT = 40;
 const CODE_RE = /^[A-Z0-9]{6,32}$/;
 
-// chama o endpoint REST do Redis com um comando ["SET", k, v, ...]
-async function kv(cmd) {
-  const r = await fetch(BASE, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify(cmd),
-  });
-  if (!r.ok) throw new Error(`kv ${r.status}`);
-  const j = await r.json();
-  if (j && j.error) throw new Error(`kv ${j.error}`);
-  return j ? j.result : null;
+/* ---------- cliente Redis mínimo (RESP sobre TCP) ---------- */
+function encodeCmd(args) {
+  const parts = [Buffer.from(`*${args.length}\r\n`)];
+  for (const a of args) {
+    const b = Buffer.isBuffer(a) ? a : Buffer.from(String(a));
+    parts.push(Buffer.from(`$${b.length}\r\n`), b, Buffer.from('\r\n'));
+  }
+  return Buffer.concat(parts);
 }
+// parseia UMA resposta a partir de buf[off]; null se ainda incompleta
+function parseReply(buf, off) {
+  if (off >= buf.length) return null;
+  const type = buf[off];
+  const nl = buf.indexOf('\r\n', off);
+  if (nl === -1) return null;
+  const line = buf.toString('utf8', off + 1, nl);
+  const next = nl + 2;
+  if (type === 0x2b) return { val: line, off: next };               // +simple
+  if (type === 0x2d) return { val: new Error(line), off: next };    // -error
+  if (type === 0x3a) return { val: parseInt(line, 10), off: next }; // :int
+  if (type === 0x24) {                                             // $bulk
+    const len = parseInt(line, 10);
+    if (len === -1) return { val: null, off: next };
+    if (next + len + 2 > buf.length) return null;
+    return { val: buf.toString('utf8', next, next + len), off: next + len + 2 };
+  }
+  if (type === 0x2a) {                                             // *array
+    const n = parseInt(line, 10);
+    if (n === -1) return { val: null, off: next };
+    let o = next; const arr = [];
+    for (let i = 0; i < n; i++) { const r = parseReply(buf, o); if (!r) return null; arr.push(r.val); o = r.off; }
+    return { val: arr, off: o };
+  }
+  return null;
+}
+// abre conexão, autentica, manda os comandos, devolve as respostas (sem a do AUTH)
+function redis(cmds) {
+  const u = new URL(REDIS_URL);
+  const useTls = u.protocol === 'rediss:';
+  const pass = decodeURIComponent(u.password || '');
+  const user = decodeURIComponent(u.username || '');
+  const pre = pass ? [user && user !== 'default' ? ['AUTH', user, pass] : ['AUTH', pass]] : [];
+  const all = pre.concat(cmds);
+
+  return new Promise((resolve, reject) => {
+    const opts = { host: u.hostname, port: +(u.port || 6379) };
+    const sock = useTls ? tls.connect({ ...opts, servername: u.hostname }) : net.connect(opts);
+    let buf = Buffer.alloc(0);
+    const replies = [];
+    let done = false;
+    const finish = (err) => { if (done) return; done = true; try { sock.destroy(); } catch {} err ? reject(err) : resolve(replies.slice(pre.length)); };
+    sock.setTimeout(8000, () => finish(new Error('redis timeout')));
+    sock.once(useTls ? 'secureConnect' : 'connect', () => sock.write(Buffer.concat(all.map(encodeCmd))));
+    sock.on('error', finish);
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      let off = 0, r;
+      while ((r = parseReply(buf, off))) {
+        replies.push(r.val); off = r.off;
+        if (replies.length >= all.length) {
+          if (pre.length && replies[0] instanceof Error) return finish(replies[0]); // AUTH falhou
+          return finish();
+        }
+      }
+      buf = buf.subarray(off);
+    });
+  });
+}
+async function kvGet(key) { const [r] = await redis([['GET', key]]); if (r instanceof Error) throw r; return r; }
+async function kvSet(key, val) { const [r] = await redis([['SET', key, val, 'EX', String(TTL)]]); if (r instanceof Error) throw r; return r; }
 
 const keyFor = code => `mobtv:sync:${code}`;
 const now = () => Date.now();
 
-// blob vazio
+/* ---------- modelo + merge ---------- */
 function empty() { return { v: 1, favs: {}, favRm: {}, cont: [], updated: 0 }; }
 
 // normaliza um blob vindo do cliente/banco para a forma canônica (defensivo)
@@ -75,27 +131,23 @@ function merge(a, b) {
   a = clean(a); b = clean(b);
   const out = empty();
 
-  // remoções: maior timestamp vence
   const rm = {};
   for (const m of [a.favRm, b.favRm]) for (const k in m) rm[k] = Math.max(rm[k] || 0, m[k]);
 
-  // adições: por chave, pega a entrada com _ts maior
   const adds = {};
   for (const m of [a.favs, b.favs]) for (const k in m) {
     if (!adds[k] || (m[k]._ts || 0) >= (adds[k]._ts || 0)) adds[k] = m[k];
   }
 
-  // efetivo: add vence remove?
   for (const k in adds) {
     const at = adds[k]._ts || 0, rt = rm[k] || 0;
-    if (at > rt) out.favs[k] = adds[k];       // favorito ativo
+    if (at > rt) out.favs[k] = adds[k];
   }
   for (const k in rm) {
     const at = adds[k] ? (adds[k]._ts || 0) : 0;
-    if (rm[k] >= at) out.favRm[k] = rm[k];     // tombstone ainda relevante
+    if (rm[k] >= at) out.favRm[k] = rm[k];
   }
 
-  // continuar assistindo: união por chave, maior ts vence, mais recentes primeiro
   const cm = {};
   for (const it of a.cont.concat(b.cont)) {
     const cur = cm[it.key];
@@ -124,7 +176,7 @@ module.exports = async (req, res) => {
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('cache-control', 'no-store');
 
-  if (!BASE || !TOKEN) {
+  if (!REDIS_URL) {
     res.statusCode = 503;
     res.end(JSON.stringify({ error: 'sync_unavailable' }));
     return;
@@ -134,15 +186,12 @@ module.exports = async (req, res) => {
     const host = req.headers.host;
     const url = new URL(req.url, `https://${host}`);
     const method = (req.method || 'GET').toUpperCase();
-
-    // valida o código
     let code = (url.searchParams.get('code') || '').toUpperCase().trim();
 
     if (method === 'GET') {
       if (!CODE_RE.test(code)) { res.statusCode = 400; res.end(JSON.stringify({ error: 'bad_code' })); return; }
-      const raw = await kv(['GET', keyFor(code)]);
-      const blob = raw ? clean(JSON.parse(raw)) : empty();
-      res.end(JSON.stringify(blob));
+      const raw = await kvGet(keyFor(code));
+      res.end(JSON.stringify(raw ? clean(JSON.parse(raw)) : empty()));
       return;
     }
 
@@ -153,10 +202,10 @@ module.exports = async (req, res) => {
       code = String(payload.code || code).toUpperCase().trim();
       if (!CODE_RE.test(code)) { res.statusCode = 400; res.end(JSON.stringify({ error: 'bad_code' })); return; }
 
-      const raw = await kv(['GET', keyFor(code)]);
+      const raw = await kvGet(keyFor(code));
       const stored = raw ? JSON.parse(raw) : empty();
       const merged = merge(stored, payload);
-      await kv(['SET', keyFor(code), JSON.stringify(merged), 'EX', String(TTL)]);
+      await kvSet(keyFor(code), JSON.stringify(merged));
       res.end(JSON.stringify(merged));
       return;
     }
