@@ -66,6 +66,8 @@ const I = {
   x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>',
   home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8M5 10v10h14V10" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   tv:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 3l4 4 4-4" stroke-linecap="round"/></svg>',
+  pip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor"/></svg>',
+  full:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
 };
 
 /* ---------- favorites & continue ---------- */
@@ -499,7 +501,11 @@ function playNow(info) {
     <video playsinline controls autoplay></video>
     <div class="pl-top">
       <button class="pl-back" aria-label="Voltar">${I.chevL}</button>
-      <div><h3>${escapeHtml(info.title || '')}</h3><div class="sub">${escapeHtml(info.sub || '')}</div></div>
+      <div class="pl-title"><h3>${escapeHtml(info.title || '')}</h3><div class="sub">${escapeHtml(info.sub || '')}</div></div>
+      <div class="pl-ctrls">
+        <button class="pl-ic" id="pl-pip" aria-label="Picture-in-picture" title="Picture-in-picture (mini player)">${I.pip}</button>
+        <button class="pl-ic" id="pl-full" aria-label="Tela cheia" title="Tela cheia (F)">${I.full}</button>
+      </div>
     </div>
     <div class="pl-spin"></div>
     <div class="pl-err"><div><h3>Não foi possível reproduzir</h3><p>O link pode estar fora do ar ou exigir o proxy.<br>Tente outro título.</p><button class="btn btn-ghost" id="pl-retry" style="margin-top:14px">Tentar de novo</button></div></div>`;
@@ -513,6 +519,12 @@ function playNow(info) {
     document.removeEventListener('keydown', keys);
   };
   layer.querySelector('.pl-back').onclick = close;
+  const toggleFull = () => { if (document.fullscreenElement) document.exitFullscreen(); else (layer.requestFullscreen || layer.webkitRequestFullscreen || (() => v.webkitEnterFullscreen?.())).call(layer); };
+  layer.querySelector('#pl-full').onclick = toggleFull;
+  const pipBtn = layer.querySelector('#pl-pip');
+  if (document.pictureInPictureEnabled) {
+    pipBtn.onclick = async () => { try { document.pictureInPictureElement ? await document.exitPictureInPicture() : await v.requestPictureInPicture(); } catch {} };
+  } else { pipBtn.style.display = 'none'; }
   const showErr = () => { spin.style.display = 'none'; err.classList.add('show'); };
   layer.querySelector('#pl-retry')?.addEventListener('click', () => { err.classList.remove('show'); start(); });
 
@@ -562,7 +574,7 @@ function playNow(info) {
     else if (e.key === ' ') { e.preventDefault(); v.paused ? v.play() : v.pause(); }
     else if (e.key === 'ArrowRight') v.currentTime += 10;
     else if (e.key === 'ArrowLeft') v.currentTime -= 10;
-    else if (e.key.toLowerCase() === 'f') { if (document.fullscreenElement) document.exitFullscreen(); else layer.requestFullscreen?.(); }
+    else if (e.key.toLowerCase() === 'f') toggleFull();
     else if (e.key.toLowerCase() === 'm') v.muted = !v.muted;
   };
   document.addEventListener('keydown', keys);

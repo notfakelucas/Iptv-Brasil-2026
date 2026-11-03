@@ -247,6 +247,11 @@ img{display:block}
 .pl-top .sub{color:var(--muted);font-size:13px}
 .pl-back{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,.1);border:1px solid var(--line2);display:grid;place-content:center;flex:0 0 auto}
 .pl-back svg{width:22px;height:22px}
+.pl-title{flex:1;min-width:0}
+.pl-ctrls{display:flex;gap:10px;flex:0 0 auto}
+.pl-ic{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,.1);border:1px solid var(--line2);display:grid;place-content:center;cursor:pointer;color:#fff;flex:0 0 auto}
+.pl-ic svg{width:22px;height:22px}
+.pl-ic:hover{background:rgba(255,255,255,.2)}
 .pl-spin{position:absolute;width:54px;height:54px;border-radius:99px;border:3px solid rgba(255,255,255,.2);border-top-color:var(--accent2);animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .pl-err{position:absolute;inset:0;display:none;place-content:center;text-align:center;padding:30px;color:var(--muted)}
