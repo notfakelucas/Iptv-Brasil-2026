@@ -646,14 +646,14 @@ function playNow(info) {
       // PRÉ-BUFFER: as fontes de IPTV entregam ~tempo real, sem folga — tocar na
       // hora trava a todo instante. Acumula uma folga antes de dar play, pra
       // absorver o jitter; se não encher em 9s, toca do mesmo jeito.
-      const PREBUF = 6;
+      const PREBUF = 4;
       const kick = () => {
         const ah = v.buffered.length ? v.buffered.end(v.buffered.length - 1) - v.currentTime : 0;
         if (ah >= PREBUF) { v.removeEventListener('progress', kick); v.play().catch(() => {}); }
       };
       v.addEventListener('progress', kick);
       if (liveKickT) clearTimeout(liveKickT);
-      liveKickT = setTimeout(() => { v.removeEventListener('progress', kick); v.play().catch(() => {}); }, 8000);
+      liveKickT = setTimeout(() => { v.removeEventListener('progress', kick); v.play().catch(() => {}); }, 6000);
       // o proxy serverless encerra o stream infinito (~60s) → LOADING_COMPLETE/ERROR:
       // se já tocou, reconecta ao vivo; se nunca tocou (fonte vazia/morta), tenta a próxima
       const onEnd = () => {
