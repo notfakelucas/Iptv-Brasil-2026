@@ -40,6 +40,53 @@ const LS = {
 /* http images (ex.: logos de canais) quebram numa página https (mixed content);
    roteia pelo proxy. Imagens https (ex.: pôsteres TMDB) vão direto. */
 function imgSrc(src) { return /^http:\/\//i.test(src) ? PROXY + enc(src) : src; }
+
+/* ===================== EPG (guia ao vivo) ===================== */
+/* data/epg.json = { gen, ch: { chaveNormalizada: [[inicio,fim,titulo], ...] } }.
+   As chaves são o nome do canal normalizado — o mesmo epgNorm() do build_epg.py. */
+let EPG = null, _epgP = null;
+function loadEpg() {
+  if (_epgP) return _epgP;
+  _epgP = fetch('data/epg.json').then(r => r.ok ? r.json() : null)
+    .then(d => (EPG = d)).catch(() => null);
+  return _epgP;
+}
+const _accless = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+const _EPGQUAL = /\b(fhd|uhd|hd|sd|4k|h\.?265|h\.?264|hevc|alt|backup|²|³|¹|tv|canal)\b/g;
+function epgNorm(name) {
+  let s = _accless(name || '').toLowerCase();
+  s = s.replace(/^[a-z]{2}:\s*/, '');            // prefixo 'br: '
+  s = s.replace(/^[a-z0-9 ]+\/[a-z]{2}\b/, '');  // prefixo 'cidade/uf'
+  s = s.replace(/\./g, ' ').replace(/[^a-z0-9 ]/g, ' ');
+  s = s.replace(_EPGQUAL, ' ').replace(/\s+/g, ' ').trim();
+  return s;
+}
+function epgProgs(title) {
+  if (!EPG || !EPG.ch) return null;
+  const k = epgNorm(title);
+  return EPG.ch[k] || EPG.ch[k.replace(/ /g, '')] || null;
+}
+/* { cur:{s,e,t}, next:{s,e,t} } ou null */
+function epgNow(title) {
+  const ps = epgProgs(title); if (!ps) return null;
+  const now = Date.now() / 1000;
+  let cur = null, next = null;
+  for (const [s, e, t] of ps) {
+    if (s <= now && now < e) cur = { s, e, t };
+    else if (s > now && !next) next = { s, e, t };
+  }
+  return (cur || next) ? { cur, next } : null;
+}
+const epgHHMM = s => new Date(s * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+/* preenche um elemento com "Agora: X" assim que o guia carregar */
+function fillEpgNow(elm, title) {
+  loadEpg().then(() => {
+    const n = epgNow(title); if (!n || !n.cur) return;
+    elm.innerHTML = `<span class="epg-dot"></span>${escapeHtml(n.cur.t)}`;
+    elm.classList.add('on');
+  });
+}
+
 /* image with graceful fallback */
 function poster(src, title, cls) {
   const wrap = el('div', 'poster');
@@ -574,7 +621,11 @@ function playNow(info) {
       engine = 'mpegts';
       curMpegts = mpegts.createPlayer(
         { type: 'mpegts', isLive: true, url: src },
-        { liveBufferLatencyChasing: true, lazyLoad: false, stashInitialSize: 256 * 1024 });
+        // NÃO perseguir o live edge (isso esvazia o buffer e trava toda hora);
+        // buffer inicial maior + limpeza automática = reprodução fluida.
+        // (sem enableWorker: dentro do Worker a URL relativa do proxy não resolve)
+        { liveBufferLatencyChasing: false, lazyLoad: false,
+          stashInitialSize: 1024 * 1024, autoCleanupSourceBuffer: true });
       curMpegts.attachMediaElement(v);
       // o proxy serverless encerra o stream infinito (~60s) → LOADING_COMPLETE/ERROR:
       // se já tocou, reconecta ao vivo; se nunca tocou (fonte vazia/morta), tenta a próxima
