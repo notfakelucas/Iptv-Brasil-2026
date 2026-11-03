@@ -37,12 +37,15 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
+/* http images (ex.: logos de canais) quebram numa página https (mixed content);
+   roteia pelo proxy. Imagens https (ex.: pôsteres TMDB) vão direto. */
+function imgSrc(src) { return /^http:\/\//i.test(src) ? PROXY + enc(src) : src; }
 /* image with graceful fallback */
 function poster(src, title, cls) {
   const wrap = el('div', 'poster');
   if (src) {
     const img = el('img'); img.loading = 'lazy'; img.decoding = 'async'; img.alt = title || '';
-    img.src = src;
+    img.src = imgSrc(src);
     img.onerror = () => { img.remove(); wrap.appendChild(el('div', 'ph', escapeHtml(cleanTitle(title)))); };
     wrap.appendChild(img);
   } else {
@@ -196,7 +199,7 @@ function hero(items) {
   function show(i) {
     idx = (i + items.length) % items.length;
     const it = items[idx];
-    const img = it.l ? `<img src="${it.l}" alt="" onerror="this.style.visibility='hidden'">` : '';
+    const img = it.l ? `<img src="${imgSrc(it.l)}" alt="" onerror="this.style.visibility='hidden'">` : '';
     bg.innerHTML = img;
     const y = yearOf(it.t);
     c.innerHTML = `
@@ -349,7 +352,7 @@ function openMovie(item) {
   const title = item.t || item.name;
   const key = 'm:' + (item.slug || '') + ':' + title;
   const m = modalShell();
-  const art = item.l ? `<img src="${item.l}" alt="" onerror="this.style.visibility='hidden'">` : '';
+  const art = item.l ? `<img src="${imgSrc(item.l)}" alt="" onerror="this.style.visibility='hidden'">` : '';
   const y = yearOf(title);
   m.body.innerHTML = `
     <div class="sheet-hero">${art}<button class="sheet-x">${I.x}</button></div>
@@ -375,7 +378,7 @@ function openSerie(serie) {
   const title = serie.t;
   const key = 's:' + (serie.slug || '') + ':' + title;
   const m = modalShell();
-  const art = serie.l ? `<img src="${serie.l}" alt="" onerror="this.style.visibility='hidden'">` : '';
+  const art = serie.l ? `<img src="${imgSrc(serie.l)}" alt="" onerror="this.style.visibility='hidden'">` : '';
   // group eps by season
   const seasons = {};
   (serie.eps || []).forEach(e => { (seasons[e.s] = seasons[e.s] || []).push(e); });
