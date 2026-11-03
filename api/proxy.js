@@ -6,6 +6,26 @@ const { Readable } = require('stream');
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
+// SSRF guard: block loopback / private / link-local (cloud metadata) targets.
+function isBlockedTarget(u) {
+  let host;
+  try { host = new URL(u).hostname.toLowerCase(); } catch { return true; }
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) return true;
+  if (host.includes(':')) { // IPv6 loopback / link-local / unique-local
+    return host === '::1' || host.startsWith('fe80') || host.startsWith('fc') || host.startsWith('fd');
+  }
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = +m[1], b = +m[2];
+    if (a === 0 || a === 127 || a === 10) return true;
+    if (a === 169 && b === 254) return true;            // link-local + 169.254.169.254 metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;  // CGNAT
+  }
+  return false;
+}
+
 function abs(base, ref) {
   try { return new URL(ref, base).href; } catch { return ref; }
 }
@@ -41,6 +61,7 @@ module.exports = async function handler(req, res) {
   if (!target || !/^https?:\/\//i.test(target)) {
     res.statusCode = 400; return res.end('bad url');
   }
+  if (isBlockedTarget(target)) { res.statusCode = 403; return res.end('blocked host'); }
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 25000);
@@ -51,6 +72,7 @@ module.exports = async function handler(req, res) {
     if (referer) headers.Referer = referer;
 
     const up = await fetch(target, { headers, redirect: 'follow', signal: ctrl.signal });
+    clearTimeout(timer); // headers received; let the body stream without the connect-timeout
     const ct = (up.headers.get('content-type') || '').toLowerCase();
     const isM3U8 = !raw && (/\.m3u8(\?|$)/i.test(target) || ct.includes('mpegurl') || ct.includes('vnd.apple'));
 
@@ -83,4 +105,4 @@ module.exports = async function handler(req, res) {
   }
 };
 
-module.exports.config = { maxDuration: 30 };
+module.exports.config = { maxDuration: 60 };

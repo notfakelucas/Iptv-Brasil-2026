@@ -84,9 +84,18 @@ function pushCont(item, pos, dur) {
 function contPos(key) { const c = conts().find(x => x.key === key); return c ? c.pos : 0; }
 
 /* ===================== Router ===================== */
-const routes = {};
-function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 window.addEventListener('hashchange', render);
+// single persistent scroll handler (avoids leaking one per navigation)
+function updateNavScroll() { const n = document.querySelector('.nav'); if (n) n.classList.toggle('scrolled', window.scrollY > 10); }
+window.addEventListener('scroll', updateNavScroll, { passive: true });
+// lazy-mount: run cb when element nears the viewport (falls back to immediate)
+function whenVisible(elm, cb) {
+  if (!('IntersectionObserver' in window)) { cb(); return; }
+  const o = new IntersectionObserver(ents => {
+    ents.forEach(en => { if (en.isIntersecting) { o.unobserve(en.target); cb(); } });
+  }, { rootMargin: '500px' });
+  o.observe(elm);
+}
 
 /* ===================== App shell ===================== */
 let CATALOG = null, HOME = null, SEARCH_IDX = null;
@@ -113,7 +122,6 @@ function buildNav() {
     if (a.dataset.r === (h.startsWith('#/cat') ? '' : h)) a.classList.add('active');
   });
   nav.querySelector('#btn-search').onclick = openSearch;
-  window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 10), { passive: true });
   nav.classList.toggle('scrolled', window.scrollY > 10);
   return nav;
 }
@@ -268,10 +276,10 @@ async function viewBrowse(app, type) {
     const row = el('div', 'row');
     row.innerHTML = `<div class="row-head"><h2>${escapeHtml(prettyLabel(cat.label))}</h2><a class="more" href="#/cat/${type}/${cat.slug}">Ver tudo (${cat.count}) ${I.chevR}</a></div>`;
     const holder = el('div'); holder.appendChild(skRail()); row.appendChild(holder); page.appendChild(row);
-    loadCat(type, cat.slug).then(items => {
+    whenVisible(row, () => loadCat(type, cat.slug).then(items => {
       holder.innerHTML = '';
       holder.appendChild(rail(items.slice(0, 18), kindOf(type)));
-    }).catch(() => holder.remove());
+    }).catch(() => holder.remove()));
   }
   app.appendChild(footer());
 }
@@ -494,7 +502,11 @@ function buildSearch() {
   document.body.appendChild(searchBox);
   const input = searchBox.querySelector('input');
   const body = searchBox.querySelector('.search-body');
-  const close = () => { searchBox.classList.remove('open'); document.body.classList.remove('no-scroll'); };
+  const hint = `<div class="search-hint">Digite para buscar em todo o catálogo do MobTV.</div>`;
+  const close = () => {
+    searchBox.classList.remove('open'); document.body.classList.remove('no-scroll');
+    input.value = ''; body.innerHTML = hint;
+  };
   searchBox.querySelector('.search-close').onclick = close;
   searchBox.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
   const run = debounce(async q => {
@@ -568,7 +580,7 @@ async function boot() {
   await render();
   // hide splash
   const sp = $('#splash');
-  setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 650); }, 1700);
+  setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 650); }, 900);
 }
 document.addEventListener('DOMContentLoaded', boot);
 })();
