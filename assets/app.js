@@ -494,7 +494,11 @@ function modalShell() {
 }
 
 /* ===================== Player ===================== */
-let curHls = null;
+let curHls = null, curMpegts = null;
+function killEngines() {
+  if (curHls) { try { curHls.destroy(); } catch {} curHls = null; }
+  if (curMpegts) { try { curMpegts.destroy(); } catch {} curMpegts = null; }
+}
 function playNow(info) {
   const layer = $('#player'); layer.hidden = false; document.body.classList.add('no-scroll');
   layer.innerHTML = `
@@ -507,13 +511,12 @@ function playNow(info) {
         <button class="pl-ic" id="pl-full" aria-label="Tela cheia" title="Tela cheia (F)">${I.full}</button>
       </div>
     </div>
-    <div class="pl-spin"></div>
     <div class="pl-err"><div><h3>Não foi possível reproduzir</h3><p>O link pode estar fora do ar ou exigir o proxy.<br>Tente outro título.</p><button class="btn btn-ghost" id="pl-retry" style="margin-top:14px">Tentar de novo</button></div></div>`;
   const v = layer.querySelector('video');
-  const spin = layer.querySelector('.pl-spin'), err = layer.querySelector('.pl-err');
+  const err = layer.querySelector('.pl-err');
   const close = () => {
     try { pushCont(info, v.currentTime, v.duration); } catch {}
-    if (curHls) { curHls.destroy(); curHls = null; }
+    killEngines();
     v.pause(); v.removeAttribute('src'); v.load();
     layer.hidden = true; layer.innerHTML = ''; document.body.classList.remove('no-scroll');
     document.removeEventListener('keydown', keys);
@@ -525,14 +528,12 @@ function playNow(info) {
   if (document.pictureInPictureEnabled) {
     pipBtn.onclick = async () => { try { document.pictureInPictureElement ? await document.exitPictureInPicture() : await v.requestPictureInPicture(); } catch {} };
   } else { pipBtn.style.display = 'none'; }
-  const showErr = () => { spin.style.display = 'none'; err.classList.add('show'); };
+  const showErr = () => { err.classList.add('show'); };
   layer.querySelector('#pl-retry')?.addEventListener('click', () => { err.classList.remove('show'); start(); });
 
   // volume persistence
   v.volume = LS.get('mobtv-vol', 1);
   v.addEventListener('volumechange', () => LS.set('mobtv-vol', v.volume));
-  v.addEventListener('playing', () => { spin.style.display = 'none'; });
-  v.addEventListener('waiting', () => { if (!err.classList.contains('show')) spin.style.display = 'block'; });
   v.addEventListener('loadedmetadata', () => { const p = contPos(info.key); if (p && p < v.duration - 15) v.currentTime = p; });
   // idle UI
   let idleT; const idle = () => { layer.classList.remove('idle'); clearTimeout(idleT); idleT = setTimeout(() => layer.classList.add('idle'), 3200); };
@@ -541,21 +542,27 @@ function playNow(info) {
   // lista de fontes (qualidades/alternativas) — ao falhar, tenta a próxima
   let srcList = (info.alts && info.alts.length) ? info.alts.slice() : [info.url];
   let srcIdx = Math.max(0, srcList.indexOf(info.url));
-  let netRetries = 0;
+  let netRetries = 0, reconnects = 0, played = false, engine = 'native';
+  v.addEventListener('playing', () => { played = true; reconnects = 0; });
   const fail = () => {
     if (srcIdx < srcList.length - 1) {
-      srcIdx++; netRetries = 0;
+      srcIdx++; netRetries = 0; reconnects = 0;
       toast('Fonte indisponível — tentando outra…');
       start();
     } else { showErr(); }
   };
   function start() {
-    spin.style.display = 'block'; err.classList.remove('show');
+    err.classList.remove('show');
+    played = false;
     const url = srcList[srcIdx];
-    const isHls = /\.m3u8(\?|$)/i.test(url) || info.type === 'live';
-    const src = proxify(url, isHls);
-    if (isHls && window.Hls && Hls.isSupported()) {
-      if (curHls) curHls.destroy();
+    const isM3u8 = /\.m3u8(\?|$)/i.test(url);
+    const isFile = /\.(mp4|m4v|mov|webm|mkv)(\?|$)/i.test(url);
+    // restreams de TV (31.43, governosptx, 64.31…) servem MPEG-TS cru, não HLS
+    const isRawTs = /\.ts(\?|$)/i.test(url) || (info.type === 'live' && !isM3u8 && !isFile);
+    const src = proxify(url, isM3u8 || isRawTs); // live sempre via proxy (http→https + CORS)
+    killEngines();
+    if (isM3u8 && window.Hls && Hls.isSupported()) {
+      engine = 'hls';
       curHls = new Hls({ maxBufferLength: 30, manifestLoadingTimeOut: 15000, fragLoadingTimeOut: 25000 });
       curHls.loadSource(src); curHls.attachMedia(v);
       curHls.on(Hls.Events.ERROR, (_, d) => {
@@ -563,12 +570,28 @@ function playNow(info) {
         if (d.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries < 2) { netRetries++; curHls.startLoad(); }
         else fail();
       });
+    } else if (isRawTs && window.mpegts && mpegts.isSupported()) {
+      engine = 'mpegts';
+      curMpegts = mpegts.createPlayer(
+        { type: 'mpegts', isLive: true, url: src },
+        { liveBufferLatencyChasing: true, lazyLoad: false, stashInitialSize: 256 * 1024 });
+      curMpegts.attachMediaElement(v);
+      // o proxy serverless encerra o stream infinito (~60s) → LOADING_COMPLETE/ERROR:
+      // se já tocou, reconecta ao vivo; se nunca tocou (fonte vazia/morta), tenta a próxima
+      const onEnd = () => {
+        if (played && reconnects < 40) { reconnects++; toast('Reconectando ao vivo…'); setTimeout(start, 700); }
+        else fail();
+      };
+      curMpegts.on(mpegts.Events.ERROR, onEnd);
+      curMpegts.on(mpegts.Events.LOADING_COMPLETE, onEnd);
+      curMpegts.load();
     } else {
+      engine = 'native';
       v.src = src;
     }
     v.play().catch(() => {});
   }
-  v.addEventListener('error', fail);
+  v.addEventListener('error', () => { if (engine === 'native') fail(); });
   const keys = e => {
     if (e.key === 'Escape') close();
     else if (e.key === ' ') { e.preventDefault(); v.paused ? v.play() : v.pause(); }
