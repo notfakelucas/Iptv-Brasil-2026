@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0b10" />
+<title>MobTV</title>
+<meta name="description" content="MobTV — filmes, séries e TV ao vivo." />
+<link rel="icon" href="assets/logo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" />
+<link rel="stylesheet" href="assets/styles.css" />
+<link rel="preload" href="data/home.json" as="fetch" />
+</head>
+<body>
+  <!-- ===== Splash / abertura ===== -->
+  <div id="splash" class="splash" aria-hidden="true">
+    <div class="splash-logo">
+      <img src="assets/logo.png" alt="MobTV" width="140" height="140"
+           onerror="this.style.display='none';this.nextElementSibling.hidden=false">
+      <div class="splash-word" hidden><b>Mob</b><span>TV</span></div>
+    </div>
+    <div class="splash-bar"><i></i></div>
+  </div>
+
+  <!-- ===== App root ===== -->
+  <div id="app" class="app" hidden></div>
+
+  <!-- ===== Player layer ===== -->
+  <div id="player" class="player" hidden></div>
+
+  <!-- toast -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js" defer></script>
+  <script src="assets/app.js" defer></script>
+</body>
+</html>

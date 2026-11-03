@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+tmdb.key
+.DS_Store
+node_modules/
+*.m3u8
